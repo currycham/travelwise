@@ -1,0 +1,37 @@
+// Optional local browser acceptance check. Launch an isolated Chrome at port 9227.
+import {writeFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const tabs=await(await fetch('http://127.0.0.1:9227/json')).json();
+const ws=new WebSocket(tabs.find(t=>t.type==='page').webSocketDebuggerUrl);
+await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
+let id=0;const callbacks=new Map();ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const cb=callbacks.get(m.id);callbacks.delete(m.id);m.error?cb.reject(m.error):cb.resolve(m.result);}};
+const call=(method,params={})=>new Promise((resolve,reject)=>{const i=++id;callbacks.set(i,{resolve,reject});ws.send(JSON.stringify({id:i,method,params}));});
+const js=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+const wait=async expression=>{for(let i=0;i<100;i++){if(await js(expression))return;await new Promise(r=>setTimeout(r,100));}throw new Error('Timed out: '+expression);};
+const click=async selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+const type=async(selector,text)=>js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(text)};e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+const screenshot=async name=>{await js('document.querySelector("#toast")?.classList.remove("show")');await new Promise(r=>setTimeout(r,150));const metrics=await call('Page.getLayoutMetrics');const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{x:0,y:0,width:metrics.cssContentSize.width,height:metrics.cssContentSize.height,scale:1}});await writeFile(new URL('../docs/screenshots/'+name,import.meta.url),Buffer.from(r.data,'base64'));};
+await call('Page.enable');await call('Runtime.enable');
+await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+await call('Page.navigate',{url:'http://127.0.0.1:8600'});await wait('document.querySelector("#brief-form")');
+await wait('document.querySelector(".pill").textContent.includes("AI 已连接")');
+await type('[name="wish"]','想离开工作节奏，看看山水和当地生活，安静一点，不想换酒店。不确定去哪，希望两套不同目的地。');
+await type('[name="origin"]','上海');
+await type('[name="minDays"]','4');await type('[name="maxDays"]','5');
+await click('#brief-form [type="submit"]');await wait('document.querySelector("[name=past]")');
+await type('[name="past"]','去过杭州和苏州，喜欢湖边散步，这次想换地方');
+await type('[name="avoid"]','不重访杭州和苏州，不去游乐园');
+await click('#brief-form [type="submit"]');await wait('document.querySelector("[name=constraints]")');
+await type('[name="constraints"]','不自驾，每天步行不超过5公里');
+await click('#brief-form [type="submit"]');
+for(let i=0;i<190;i++){if(await js('document.querySelector(".comparison")'))break;if(await js('document.querySelector(".error")'))throw new Error(await js('document.querySelector(".error").textContent'));await new Promise(r=>setTimeout(r,1000));}
+assert.equal(await js('document.querySelectorAll(".comparison article").length'),2);
+const workspace=await js('JSON.parse(localStorage.getItem("travelwise-v1")).workspace');
+assert.equal(workspace.plans.length,2);assert.notEqual(workspace.plans[0].destination,workspace.plans[1].destination);
+await writeFile(new URL('../docs/live-discovery-sample.json',import.meta.url),JSON.stringify({brief:await js('JSON.parse(localStorage.getItem("travelwise-v1")).brief'),plans:workspace.plans},null,2));
+await screenshot('ai-comparison.png');
+await click('[data-action="choose"]');await wait('document.querySelector(".day")');await click('[data-action="save"]');
+assert.ok(await js('document.body.textContent.includes("AI 草案")'));
+await screenshot('ai-plan.png');
+console.log('PASS: real UI generation without a destination → two distinct destinations → select → save. Destinations:',workspace.plans.map(p=>p.destination).join(' / '));
+await js('localStorage.clear();location.reload()');ws.close();

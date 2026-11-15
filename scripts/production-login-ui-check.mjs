@@ -1,0 +1,23 @@
+// Optional local browser acceptance check. Launch an isolated Chrome at port 9227.
+import {writeFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const tabs=await(await fetch('http://127.0.0.1:9227/json')).json();
+const ws=new WebSocket(tabs.find(t=>t.type==='page').webSocketDebuggerUrl);
+await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
+let id=0;const callbacks=new Map();ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const cb=callbacks.get(m.id);callbacks.delete(m.id);m.error?cb.reject(m.error):cb.resolve(m.result);}};
+const call=(method,params={})=>new Promise((resolve,reject)=>{const i=++id;callbacks.set(i,{resolve,reject});ws.send(JSON.stringify({id:i,method,params}));});
+const js=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+const wait=async expression=>{for(let i=0;i<100;i++){if(await js(expression))return;await new Promise(r=>setTimeout(r,100));}throw new Error('Timed out: '+expression);};
+const click=async selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+const type=async(selector,text)=>js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(text)};e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+const screenshot=async name=>{await js('document.querySelector("#toast")?.classList.remove("show")');await new Promise(r=>setTimeout(r,150));const metrics=await call('Page.getLayoutMetrics');const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{x:0,y:0,width:metrics.cssContentSize.width,height:metrics.cssContentSize.height,scale:1}});await writeFile(new URL('../docs/screenshots/'+name,import.meta.url),Buffer.from(r.data,'base64'));};
+await call('Page.enable');await call('Runtime.enable');
+await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+await call('Page.navigate',{url:'https://travelwise.waywise.tech'});await wait('document.querySelector(".account-trigger")');
+assert.ok(await js('document.querySelector(".account-trigger").textContent.includes("登录")'));
+await click('[data-action="account"]');await wait('document.querySelector("#login-form")');
+assert.ok(await js('document.querySelector("#modal").textContent.includes("首次验证即注册")'));
+await screenshot('production-login-desktop.png');
+await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await screenshot('production-login-mobile.png');
+assert.equal(await js('document.documentElement.scrollWidth<=390'),true);
+console.log('PASS: production HTTPS login/register UI and 390px mobile modal; no email sent.');ws.close();

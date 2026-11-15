@@ -1,0 +1,15 @@
+[Unit]
+Description=TravelWise restricted account helper
+[Service]
+Type=exec
+User=root
+ExecStart=/usr/local/libexec/travelwise-accounts
+StandardInput=socket
+StandardOutput=inherit
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+TimeoutStartSec=40
+RuntimeMaxSec=40

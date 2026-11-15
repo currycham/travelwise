@@ -1,0 +1,38 @@
+// Optional local browser acceptance check. Launch an isolated Chrome at port 9227.
+import {writeFile} from 'node:fs/promises';
+import {createAccounts} from '../app/accounts.mjs';
+import assert from 'node:assert/strict';
+const tabs=await(await fetch('http://127.0.0.1:9227/json')).json();
+const ws=new WebSocket(tabs.find(t=>t.type==='page').webSocketDebuggerUrl);
+await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
+let id=0;const callbacks=new Map();ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const cb=callbacks.get(m.id);callbacks.delete(m.id);m.error?cb.reject(m.error):cb.resolve(m.result);}};
+const call=(method,params={})=>new Promise((resolve,reject)=>{const i=++id;callbacks.set(i,{resolve,reject});ws.send(JSON.stringify({id:i,method,params}));});
+const js=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw new Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+const wait=async expression=>{for(let i=0;i<100;i++){if(await js(expression))return;await new Promise(r=>setTimeout(r,100));}throw new Error('Timed out: '+expression);};
+const click=async selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+const type=async(selector,text)=>js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(text)};e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+const screenshot=async name=>{await js('document.querySelector("#toast")?.classList.remove("show")');await new Promise(r=>setTimeout(r,150));const metrics=await call('Page.getLayoutMetrics');const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{x:0,y:0,width:metrics.cssContentSize.width,height:metrics.cssContentSize.height,scale:1}});await writeFile(new URL('../docs/screenshots/'+name,import.meta.url),Buffer.from(r.data,'base64'));};
+await call('Page.enable');await call('Runtime.enable');await call('Network.enable');
+await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+await call('Network.clearBrowserCookies');await call('Page.navigate',{url:'http://127.0.0.1:8600'});await wait('document.querySelector("#brief-form")');
+await js('localStorage.clear();location.reload()');await wait('document.querySelector("#brief-form")');
+await click('[data-action="example"][data-key="hangzhou"]');await click('[data-action="save"]');
+let code;const seed=createAccounts('/tmp/travelwise-account-ui',{now:()=>Date.now()+61000,sendCode:async(e,c)=>code=c});await seed.requestCode('ui-fixture@example.com','test');
+await click('[data-action="account"]');await type('[name="email"]','ui-fixture@example.com');await type('[name="code"]',code);await click('[name="importGuest"]');await click('#login-form [type="submit"]');
+await wait('!document.querySelector("#modal").open');
+await click('[data-action="nav"][data-page="saved"]');assert.equal(await js('document.querySelectorAll(".saved-card").length'),1);
+await click('[data-action="account"]');await type('#travel-profile','我更喜欢慢旅行，想少换酒店');await click('[data-action="save-profile"]');
+await wait('document.querySelector("#modal").textContent.includes("已同步")');await screenshot('account-desktop.png');
+await click('[data-action="logout"]');await wait('document.querySelector(".account-trigger").textContent.includes("登录")');
+await click('[data-action="nav"][data-page="saved"]');assert.equal(await js('document.querySelectorAll(".saved-card").length'),0);
+// A fresh browser cache represents another device; data must come from the account.
+await js('localStorage.clear();location.reload()');await wait('document.querySelector("#brief-form")');
+seed.close();const seed2=createAccounts('/tmp/travelwise-account-ui',{now:()=>Date.now()+122000,sendCode:async(e,c)=>code=c});await seed2.requestCode('ui-fixture@example.com','test');seed2.close();
+await click('[data-action="account"]');await type('[name="email"]','ui-fixture@example.com');await type('[name="code"]',code);await click('#login-form [type="submit"]');await wait('!document.querySelector("#modal").open');
+await click('[data-action="nav"][data-page="saved"]');assert.equal(await js('document.querySelectorAll(".saved-card").length'),1);
+await click('[data-action="account"]');assert.ok(await js('document.querySelector("#travel-profile").value.includes("少换酒店")'));
+await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await screenshot('account-mobile.png');
+assert.equal(await js('document.documentElement.scrollWidth<=390'),true);
+await click('[data-action="close-modal"]');await click('[data-action="nav"][data-page="history"]');assert.ok(await js('document.body.textContent.includes("规划过的目的地")'));assert.equal(await js('document.documentElement.scrollWidth<=390'),true);
+await screenshot('history-mobile.png');
+console.log('PASS: email verify UI → explicit guest migration → cloud profile/saved plans → logout isolation → fresh-browser restoration → mobile account/history. No real mail or model call.');ws.close();

@@ -1,0 +1,35 @@
+#!/usr/bin/python3 -I
+"""Fixed, noninteractive task: read only verified-email identity fields as each owner.
+No app-requested command, SQL, path, email list or plaintext email is exported.
+"""
+import hashlib,hmac,json,os,secrets,subprocess,tempfile,time
+from pathlib import Path
+os.umask(0o077)
+base=Path('/var/lib/travelwise-identity');base.mkdir(mode=0o700,exist_ok=True)
+keypath=base/'secret'
+if not keypath.exists():
+    with keypath.open('x') as f:f.write(secrets.token_hex(32))
+key=keypath.read_text().encode();index={};unavailable=[]
+query="""import sqlite3,sys,json
+with sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True,timeout=3) as db:
+ cols={r[1] for r in db.execute('PRAGMA table_info(users)')}
+ filters=' AND banned=0' if 'banned' in cols else ''
+ if 'demo' in cols:filters+=' AND demo=0'
+ print(json.dumps([r[0] for r in db.execute('SELECT '+sys.argv[2]+' FROM users WHERE '+sys.argv[2]+' IS NOT NULL'+filters)]))
+"""
+for name,col in [('readwise','email'),('investwise','login_email'),('savewise','email'),('learnwise','email'),('sportswise','email')]:
+    try:
+        result=subprocess.run(['/usr/sbin/runuser','-u',name,'--','/usr/bin/python3','-I','-c',query,f'/srv/{name}/data/{name}.db',col],capture_output=True,text=True,timeout=5,check=True)
+        for email in json.loads(result.stdout):
+            normalized=str(email).strip().lower()
+            if '@' not in normalized:continue
+            digest=hmac.new(key,normalized.encode(),hashlib.sha256).hexdigest()
+            if name not in index.setdefault(digest,[]):index[digest].append(name)
+    except (subprocess.SubprocessError,OSError,ValueError):unavailable.append(name)
+fd,tmp=tempfile.mkstemp(dir=base)
+try:
+    with os.fdopen(fd,'w') as f:json.dump({'at':time.time(),'index':index,'unavailable':unavailable},f)
+    os.replace(tmp,base/'index.json')
+finally:
+    if os.path.exists(tmp):os.unlink(tmp)
+print('Identity index refreshed; unavailable products: '+(','.join(unavailable) or 'none'))

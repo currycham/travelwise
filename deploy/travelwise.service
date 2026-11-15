@@ -1,0 +1,24 @@
+[Unit]
+Description=TravelWise thoughtful travel planning
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=travelwise
+Group=travelwise
+WorkingDirectory=/srv/travelwise/app
+EnvironmentFile=/srv/travelwise/app/.env
+ExecStart=/usr/bin/node app/server.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/travelwise/data
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

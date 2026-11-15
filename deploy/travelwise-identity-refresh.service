@@ -1,0 +1,14 @@
+[Unit]
+Description=TravelWise read-only email identity index refresh
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/libexec/travelwise-identity-refresh
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateNetwork=true
+StateDirectory=travelwise-identity
+StateDirectoryMode=0700
+TimeoutStartSec=45

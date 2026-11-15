@@ -1,0 +1,11 @@
+[Unit]
+Description=TravelWise restricted mail and identity bridge socket
+[Socket]
+ListenStream=/run/travelwise-accounts.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=travelwise
+Accept=yes
+MaxConnections=20
+[Install]
+WantedBy=sockets.target

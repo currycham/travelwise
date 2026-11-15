@@ -1,0 +1,43 @@
+#!/usr/bin/python3 -I
+"""Narrow root-owned helper. Never returns secrets, business records or other user IDs."""
+import json,re,sys,sqlite3,smtplib,ssl,hashlib,hmac,time
+from pathlib import Path
+from email.message import EmailMessage
+from email.utils import formataddr,parseaddr
+
+def load_env(p):
+    env={}
+    for line in Path(p).read_text().splitlines():
+        key,sep,value=line.partition('=')
+        if sep and not key.lstrip().startswith('#'):env[key.strip()]=value.strip().strip('\"\'')
+    return env
+
+def run(data):
+    email=str(data.get('email','')).strip().lower()
+    if len(email)>200 or not re.fullmatch(r"[-a-z0-9.!#$%&'*+/=?^_`{|}~]+@[a-z0-9.-]+\.[a-z]{2,}",email):raise ValueError('Invalid email')
+    if data.get('action')=='mail':
+        code=str(data.get('code',''))
+        if not re.fullmatch(r'\d{6}',code):raise ValueError('Invalid code')
+        env=load_env('/srv/sportswise/app/.env')
+        msg=EmailMessage();msg['Subject']='TravelWise 登录验证码';msg['From']=formataddr(('TravelWise',parseaddr(env.get('SMTP_FROM') or env['SMTP_USER'])[1]));msg['To']=email
+        msg.set_content(f'你的 TravelWise 登录验证码是 {code}，10 分钟内有效，请勿转发。首次验证后自动注册。\n\n非本人操作请忽略。\nhttps://travelwise.waywise.tech')
+        port=int(env.get('SMTP_PORT','465'));host=env['SMTP_HOST']
+        if port==465:
+            with smtplib.SMTP_SSL(host,port,timeout=25,context=ssl.create_default_context()) as smtp:smtp.login(env['SMTP_USER'],env['SMTP_PASSWORD']);smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host,port,timeout=25) as smtp:smtp.starttls(context=ssl.create_default_context());smtp.login(env['SMTP_USER'],env['SMTP_PASSWORD']);smtp.send_message(msg)
+        return {'ok':True}
+    if data.get('action')=='links':
+        base=Path('/var/lib/travelwise-identity')
+        snapshot=json.loads((base/'index.json').read_text())
+        digest=hmac.new((base/'secret').read_text().encode(),email.encode(),hashlib.sha256).hexdigest()
+        unavailable=snapshot.get('unavailable',[])
+        fresh=time.time()-snapshot['at']<900
+        return {'products':snapshot['index'].get(digest,[]),'available':fresh and not unavailable,'unavailable':unavailable,'checkedAt':snapshot['at']}
+    raise ValueError('Unsupported action')
+try:
+    raw=sys.stdin.read(4097)
+    if len(raw)>4096:raise ValueError('Too much input')
+    print(json.dumps(run(json.loads(raw))))
+except Exception:
+    print(json.dumps({'error':'Account service temporarily unavailable'}));sys.exit(1)

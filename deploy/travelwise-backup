@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Consistent private backups of usage and account records; retain 14 per database."""
+import datetime
+import os
+import sqlite3
+from pathlib import Path
+os.umask(0o077)
+base=Path('/srv/travelwise')
+for name in ('usage','accounts'):
+    source=base/'data'/(name+'.sqlite')
+    if source.exists():
+        target=base/'backup'/(name+'-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')+'.sqlite')
+        with sqlite3.connect(f'file:{source}?mode=ro',uri=True) as a,sqlite3.connect(target) as b:
+            a.backup(b)
+            assert b.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+        for old in sorted((base/'backup').glob(name+'-*.sqlite'))[:-14]:old.unlink()
